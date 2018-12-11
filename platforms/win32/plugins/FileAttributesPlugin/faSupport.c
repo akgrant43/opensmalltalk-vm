@@ -257,19 +257,20 @@ int	i;
 
 	printf("StPath: %s\n", aFaPath->path);
 	printf("StPathLen:	%d\n", aFaPath->path_len);
+	printf("StPath strlen:	%d\n", strlen(aFaPath->path));
 	printf("Path: 0x%p, File: 0x%p\n", (void *)aFaPath->path, (void *)aFaPath->path_file);
-	printf("Max File Len:	%d\n\n", aFaPath->max_file_len);
-
+	printf("Max File Len:	%d\n", aFaPath->max_file_len);
 	printf("Plat code points: ");
-	for (i=0; i<aFaPath->winpath_len; i++) {
+	for (i=0; i<wcslen(aFaPath->winpath); i++) {
 		printf(" %d", aFaPath->winpath[i]);
 	}
 	printf("\n");
 	printf("PlatPathLen:	%d\n", aFaPath->winpath_len);
+	printf("PlatPath wcslen: %d\n", wcslen(aFaPath->winpath));
 	printf("PathLPP: 0x%p, Path: 0x%p, File: 0x%p\n",
 		(void *)aFaPath->winpathLPP, (void *)aFaPath->winpath, (void *)aFaPath->winpath_file);
 	printf("Max File Len:	%d\n", aFaPath->winmax_file_len);
-	printf("\n\n\n");
+	printf("faGetPlatPathCPP(): 0x%p\n", faGetPlatPathCPP(aFaPath));
 	fflush(stdout);
 }
 
@@ -408,7 +409,7 @@ DWORD	ffError;
 	status = faSetStFile(aFaPath, "*");
 	if (status) return status;
  
-	aFaPath->directoryHandle = FindFirstFileW(faGetPlatPathLPP(aFaPath), &aFaPath->findData);
+	aFaPath->directoryHandle = FindFirstFileW(faGetPlatPathCPP(aFaPath), &aFaPath->findData);
 	if (aFaPath->directoryHandle == INVALID_HANDLE_VALUE) {
 		ffError = GetLastError();
 		if (ffError == ERROR_NO_MORE_FILES)
