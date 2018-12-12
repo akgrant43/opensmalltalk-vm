@@ -384,6 +384,74 @@ char	stName[FA_PATH_MAX];
 
 
 
+/*
+ * faSetStMode
+ *
+ * Set the bits in st_mode that Windows supports
+ *
+ * Any existing value is overwritten
+ */
+int faSetStMode(fapath, *aFaPath, uint *st_mode, DWORD dwFileAttributes)
+{
+WCHAR	*ext;
+int	pathLen;
+
+	printf("st_mode path = %s\n", faGetStPath(aFaPath));
+	/* permissions are the bottom 9 bits */
+	*st_mode = S_IRUSR | (S_IRUSR>>3) | (S_IRUSR>>6);
+	if (!(dwFileAttributes & FILE_ATTRIBUTE_READONLY))
+		*st_mode |= S_IWUSR | (S_IWUSR>>3) | (S_IWUSR>>6);
+	if (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		*st_mode |= S_IXUSR | (S_IXUSR>>3) | (S_IXUSR>>6);
+	else {
+		pathLen = wcslen(aFaPath->winpathLPP);
+		if (aFaPath->winpathLPP[pathLen - 4] == L'.') {
+		ext = &aFaPath->winpathLPP[pathLen - 3];
+		if (!_wcsicmp (ext, L"COM"))
+			*st_mode |= S_IXUSR | (S_IXUSR>>3) | (S_IXUSR>>6);
+		else if (!_wcsicmp (ext, L"EXE"))
+			*st_mode |= S_IXUSR | (S_IXUSR>>3) | (S_IXUSR>>6);
+		else if (!_wcsicmp (ext, L"BAT"))
+			*st_mode |= S_IXUSR | (S_IXUSR>>3) | (S_IXUSR>>6);
+		else if (!_wcsicmp (ext, L"CMD"))
+			*st_mode |= S_IXUSR | (S_IXUSR>>3) | (S_IXUSR>>6); } }
+
+	/* file type */
+	if (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+		printf("Directory\n");
+		*st_mode |= S_IFDIR; }
+	else if (dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+		printf("Symbolic link\n"
+		*st_mode |= S_IFLNK; }
+	else {
+		printf("Regular File\n");
+		*st_mode |= S_IFREG; }
+	printf("Mode = 0x%x\n", *st_mode);
+	fflush(stdout);
+}
+
+
+
+/*
+ * faWinDevId
+ *
+ * Answer the device id, which is the drive number of the disk containing
+ * the file.
+ *
+ * TODO: UNC paths aren't handled properly yet
+ */
+int faWinDevId(fapath *aFaPath)
+{
+char	*path;
+
+	path = faGetStPath(aFaPath);
+	if (path[1] == ':')
+		return path[0] - 'A';
+	else
+		return 26;
+}
+
+
 
 /*
  * faOpenDirectory
@@ -498,124 +566,115 @@ sqInt	status;
  */
 sqInt faFileAttribute(fapath *aFaPath, sqInt attributeNumber)
 {
-int			status;
+int		status;
 sqInt		resultOop = 0;
-int			mode;
+uint		st_mode;
 sqLong		attributeDate;
 FILETIME	fileTime;
 SYSTEMTIME	sysTime;
 faStatStruct	statBuf;
 WIN32_FILE_ATTRIBUTE_DATA winAttrs;
 
-	if (attributeNumber <= 8) {
-		/* Requested attribute comes from stat() entry */
-		status = _wstat(faGetPlatPath(aFaPath), &statBuf);
-		if (status)
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+	status = GetFileAttributesExW(faGetPlatPath(aFaPath), 
+			GetFileExInfoStandard, &winAttrs);
+	if (!status) 
+		return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes)
+	switch (attributeNumber) {
 
-		switch (attributeNumber) {
+		case 1: /* fileName, not supported for a single attribute */
+			resultOop = interpreterProxy->nilObject();
+			break;
 
-			case 1: /* fileName, not supported for a single attribute */
-				resultOop = interpreterProxy->nilObject();
-				break;
+		case 2: /* Mode */
+			resultOop = interpreterProxy->positive32BitIntegerFor(st_mode);
+			break;
 
-			case 2: /* Mode */
-				resultOop = interpreterProxy->positive32BitIntegerFor(statBuf.st_mode);
-				break;
+		case 3: /* inode */
+			resultOop = interpreterProxy->positive32BitIntegerFor(0);
+			break;
 
-			case 3: /* inode */
-				resultOop = interpreterProxy->positive64BitIntegerFor(statBuf.st_ino);
-				break;
+		case 4: /* device id */
+			resultOop = interpreterProxy->positive32BitIntegerFor(faWinDevId(aFaPath));
+			break;
 
-			case 4: /* device id */
-				resultOop = interpreterProxy->positive64BitIntegerFor(statBuf.st_dev);
-				break;
+		case 5: /* nlink - not yet supported */
+			resultOop = interpreterProxy->positive32BitIntegerFor(0);
+			break;
 
-			case 5: /* nlink */
-				resultOop = interpreterProxy->positive64BitIntegerFor(statBuf.st_nlink);
-				break;
+		case 6: /* uid - not supported on Windows */
+			resultOop = interpreterProxy->positive32BitIntegerFor(0);
+			break;
 
-			case 6: /* uid */
-				resultOop = interpreterProxy->positive32BitIntegerFor(statBuf.st_uid);
-				break;
+		case 7: /* gid - not supported on windows */
+			resultOop = interpreterProxy->positive32BitIntegerFor(0);
+			break;
 
-			case 7: /* gid */
-				resultOop = interpreterProxy->positive32BitIntegerFor(statBuf.st_gid);
-				break;
+		case 8: /* size (if file) */
+			if (S_ISDIR(st_mode) == 0)
+				resultOop = interpreterProxy->positive64BitIntegerFor(statBuf.st_size);
+			else
+				resultOop = interpreterProxy->positive32BitIntegerFor(0);
+			break;
 
-			case 8: /* size (if file) */
-				if (S_ISDIR(statBuf.st_mode) == 0)
-					resultOop = interpreterProxy->positive64BitIntegerFor(statBuf.st_size);
-				else
-					resultOop = interpreterProxy->positive32BitIntegerFor(0);
-				break;
-		}
+		case 9: /* access time */
+			if (!FileTimeToLocalFileTime(&winAttrs.ftLastAccessTime, &fileTime))
+ 				return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
+			if (!FileTimeToSystemTime(&fileTime, &sysTime))
+ 				return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
+			attributeDate = faConvertWinToLongSqueakTime(sysTime);
+			resultOop = interpreterProxy->signed64BitIntegerFor(attributeDate);
+			break;
 
-	} else if (attributeNumber <= 12) {
-		status = GetFileAttributesExW(faGetPlatPath(aFaPath), 
-					GetFileExInfoStandard, &winAttrs);
-		if (!status) 
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
-		switch (attributeNumber) {
-			case 9: /* access time */
-				if (!FileTimeToLocalFileTime(&winAttrs.ftLastAccessTime, &fileTime))
- 					return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-				if (!FileTimeToSystemTime(&fileTime, &sysTime))
- 					return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-				attributeDate = faConvertWinToLongSqueakTime(sysTime);
-				resultOop = interpreterProxy->signed64BitIntegerFor(attributeDate);
-				break;
+		case 10: /* modified time */
+			if (!FileTimeToLocalFileTime(&winAttrs.ftLastWriteTime, &fileTime))
+ 				return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
+			if (!FileTimeToSystemTime(&fileTime, &sysTime))
+ 				return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
+			attributeDate = faConvertWinToLongSqueakTime(sysTime);
+			resultOop = interpreterProxy->signed64BitIntegerFor(attributeDate);
+			break;
 
-			case 10: /* modified time */
-				if (!FileTimeToLocalFileTime(&winAttrs.ftLastWriteTime, &fileTime))
- 					return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-				if (!FileTimeToSystemTime(&fileTime, &sysTime))
- 					return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-				attributeDate = faConvertWinToLongSqueakTime(sysTime);
-				resultOop = interpreterProxy->signed64BitIntegerFor(attributeDate);
-				break;
+		case 11: /* change time */
+			resultOop = interpreterProxy->nilObject();
+			break;
 
-			case 11: /* change time */
-				resultOop = interpreterProxy->nilObject();
-				break;
+		case 12: /* creation time */
+			if (!FileTimeToLocalFileTime(&winAttrs.ftCreationTime, &fileTime))
+ 				return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
+			if (!FileTimeToSystemTime(&fileTime, &sysTime))
+ 				return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
+			attributeDate = faConvertWinToLongSqueakTime(sysTime);
+			resultOop = interpreterProxy->signed64BitIntegerFor(attributeDate);
+			break;
 
-			case 12: /* creation time */
-				if (!FileTimeToLocalFileTime(&winAttrs.ftCreationTime, &fileTime))
- 					return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-				if (!FileTimeToSystemTime(&fileTime, &sysTime))
- 					return interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-				attributeDate = faConvertWinToLongSqueakTime(sysTime);
-				resultOop = interpreterProxy->signed64BitIntegerFor(attributeDate);
-				break;
-		}
-	} else if (attributeNumber < 16) {
-		switch (attributeNumber) {
-			case 13:
-				mode = R_OK;
-				break;
+		case 13:
+			if (st_mode & S_IRUSR)
+				resultOop = interpreterProxy->trueObject();
+			else
+				resultOop = interpreterProxy->falseObject();
+			break;
 
-			case 14:
-				mode = W_OK;
-				break;
+		case 14:
+			if (st_mode & S_IWUSR)
+				resultOop = interpreterProxy->trueObject();
+			else
+				resultOop = interpreterProxy->falseObject();
+			break;
 
-			case 15:
-				mode = X_OK;
-				break;
-		}
-		if (_waccess(faGetPlatPath(aFaPath), mode) == 0)
-			resultOop = interpreterProxy->trueObject();
-		else
-			resultOop = interpreterProxy->falseObject();
-	} else if (attributeNumber == 16) {
-		/* isSymlink */
-		status = GetFileAttributesExW(faGetPlatPath(aFaPath), 
-					GetFileExInfoStandard, &winAttrs);
-		if (!status) 
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
-		if (winAttrs.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
-			resultOop = interpreterProxy->trueObject();
-		else
-			resultOop = interpreterProxy->falseObject();
+		case 15:
+			if (st_mode & S_IXUSR)
+				resultOop = interpreterProxy->trueObject();
+			else
+				resultOop = interpreterProxy->falseObject();
+			break;
+
+		case 16:
+			if (st_mode & S_IFLNK)
+				resultOop = interpreterProxy->trueObject();
+			else
+				resultOop = interpreterProxy->falseObject();
+			break;
 	}
 
 	return resultOop;
