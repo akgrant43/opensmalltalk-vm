@@ -9,6 +9,8 @@
 #include "sq.h"
 #include "faCommon.h"
 
+#define	S_IFLNK	0xA000
+
 extern struct VirtualMachine * interpreterProxy;
 
 
@@ -391,12 +393,11 @@ char	stName[FA_PATH_MAX];
  *
  * Any existing value is overwritten
  */
-int faSetStMode(fapath, *aFaPath, uint *st_mode, DWORD dwFileAttributes)
+int faSetStMode(fapath *aFaPath, unsigned int *st_mode, DWORD dwFileAttributes)
 {
 WCHAR	*ext;
 int	pathLen;
 
-	printf("st_mode path = %s\n", faGetStPath(aFaPath));
 	/* permissions are the bottom 9 bits */
 	*st_mode = S_IRUSR | (S_IRUSR>>3) | (S_IRUSR>>6);
 	if (!(dwFileAttributes & FILE_ATTRIBUTE_READONLY))
@@ -418,16 +419,12 @@ int	pathLen;
 
 	/* file type */
 	if (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-		printf("Directory\n");
 		*st_mode |= S_IFDIR; }
 	else if (dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
-		printf("Symbolic link\n"
 		*st_mode |= S_IFLNK; }
 	else {
-		printf("Regular File\n");
 		*st_mode |= S_IFREG; }
-	printf("Mode = 0x%x\n", *st_mode);
-	fflush(stdout);
+	return 0;
 }
 
 
@@ -568,7 +565,7 @@ sqInt faFileAttribute(fapath *aFaPath, sqInt attributeNumber)
 {
 int		status;
 sqInt		resultOop = 0;
-uint		st_mode;
+unsigned int	st_mode;
 sqLong		attributeDate;
 FILETIME	fileTime;
 SYSTEMTIME	sysTime;
@@ -581,7 +578,7 @@ sqLong		fileSize;
 	if (!status) {
 		interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
 		return 0; }
-	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes)
+	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes);
 
 	switch (attributeNumber) {
 
@@ -602,7 +599,8 @@ sqLong		fileSize;
 			break;
 
 		case 5: /* nlink - not yet supported */
-			resultOop = interpreterProxy->positive32BitIntegerFor(0);
+			interpreterProxy->primitiveFailForOSError(FA_UNSUPPORTED_OPERATION);
+			resultOop = 0;
 			break;
 
 		case 6: /* uid - not supported on Windows */
@@ -614,7 +612,8 @@ sqLong		fileSize;
 			break;
 
 		case 8: /* size (if file) */
-			fileSize = (winAttrs.nFileSizeHigh << 32) + winAttrs.nFileSizeLow;
+			fileSize = winAttrs.nFileSizeHigh;
+			fileSize = (fileSize << 32) + winAttrs.nFileSizeLow;
 			if (S_ISDIR(st_mode) == 0)
 				resultOop = interpreterProxy->positive64BitIntegerFor(fileSize);
 			else
@@ -674,7 +673,7 @@ sqLong		fileSize;
 			break;
 
 		case 16:
-			if (st_mode & S_IFLNK)
+			if ((st_mode & S_IFLNK) == S_IFLNK)
 				resultOop = interpreterProxy->trueObject();
 			else
 				resultOop = interpreterProxy->falseObject();
@@ -697,7 +696,7 @@ sqInt faFileStatAttributes(fapath *aFaPath, int lStat, sqInt attributeArray)
 {
 int		status;
 sqInt		resultOop = 0;
-uint		st_mode;
+unsigned int	st_mode;
 sqLong		attributeDate;
 FILETIME	fileTime;
 SYSTEMTIME	sysTime;
@@ -712,7 +711,7 @@ sqLong		fileSize;
 			GetFileExInfoStandard, &winAttrs);
 	if (!status)
 		return FA_CANT_STAT_PATH;
-	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes)
+	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes);
 
 	interpreterProxy->storePointerofObjectwithValue(
 		0, attributeArray,
@@ -726,23 +725,28 @@ sqLong		fileSize;
 		2, attributeArray,
 		interpreterProxy->positive32BitIntegerFor(0));
 
+	/* device id */
 	interpreterProxy->storePointerofObjectwithValue(
 		3, attributeArray,
 		interpreterProxy->positive32BitIntegerFor(faWinDevId(aFaPath)));
 
+	/* nlinks - Not Yet Supported */
 	interpreterProxy->storePointerofObjectwithValue(
 		4, attributeArray,
-		interpreterProxy->positive32BitIntegerFor(0));
+		interpreterProxy->nilObject());
 
+	/* uid */
 	interpreterProxy->storePointerofObjectwithValue(
 		5, attributeArray,
 		interpreterProxy->positive32BitIntegerFor(0));
 
+	/* gid */
 	interpreterProxy->storePointerofObjectwithValue(
 		6, attributeArray,
 		interpreterProxy->positive32BitIntegerFor(0));
 
-	fileSize = (winAttrs.nFileSizeHigh << 32) + winAttrs.nFileSizeLow;
+	fileSize = winAttrs.nFileSizeHigh;
+	fileSize = (fileSize << 32) + winAttrs.nFileSizeLow;
 	interpreterProxy->storePointerofObjectwithValue(
 		7, attributeArray,
 		(S_ISDIR(st_mode) == 0) ?
@@ -765,7 +769,7 @@ sqLong		fileSize;
 		return FA_TIME_CONVERSION_FAILED; }
 	if (!FileTimeToSystemTime(&fileTime, &sysTime)) {
  		interpreterProxy->primitiveFailForOSError(FA_TIME_CONVERSION_FAILED);
-		return FA_TIME_CONVERSION_FAILD; }
+		return FA_TIME_CONVERSION_FAILED; }
 	attributeDate = faConvertWinToLongSqueakTime(sysTime);
 	interpreterProxy->storePointerofObjectwithValue(
 		9, attributeArray,
@@ -806,13 +810,12 @@ sqInt faExists(fapath *aFaPath)
 BOOL		status;
 WIN32_FILE_ATTRIBUTE_DATA winAttrs;
 
-	status = GetFileAttributesExW(faGetPlatPath(aFaPath), 
+	status = GetFileAttributesExW(faGetPlatPathCPP(aFaPath), 
 			GetFileExInfoStandard, &winAttrs);
 	if (status != 0)
 		return interpreterProxy->trueObject();
-	else {
-printf("%s: doesn't exists: %d\n", faGetStPath(aFaPath), GetLastError());
-		return interpreterProxy->falseObject(); }
+	else
+		return interpreterProxy->falseObject();
 }
 
 
@@ -828,11 +831,12 @@ printf("%s: doesn't exists: %d\n", faGetStPath(aFaPath), GetLastError());
 sqInt faAccessAttributes(fapath *aFaPath, sqInt attributeArray, sqInt offset)
 {
 int	status;
-uint	st_mode;
+unsigned int	st_mode;
 sqInt	index;
 sqInt	trueOop;
 sqInt	falseOop;
 sqInt	accessOop;
+WIN32_FILE_ATTRIBUTE_DATA winAttrs;
 
 
 	status = GetFileAttributesExW(faGetPlatPathCPP(aFaPath), 
@@ -840,7 +844,7 @@ sqInt	accessOop;
 	if (!status) {
 		interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
 		return FA_CANT_STAT_PATH; }
-	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes)
+	faSetStMode(aFaPath, &st_mode, winAttrs.dwFileAttributes);
 
 	index = offset;
 	trueOop = interpreterProxy->trueObject();
