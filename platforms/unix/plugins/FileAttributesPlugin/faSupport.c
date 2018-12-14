@@ -344,15 +344,16 @@ sqInt faFileAttribute(fapath *aFaPath, sqInt attributeNumber)
 {
 faStatStruct	statBuf;
 int		status;
-sqInt	resultOop = 0;
+sqInt		resultOop = 0;
 int		mode;
 
 
 	if (attributeNumber <= 12) {
 		/* Requested attribute comes from stat() entry */
 		status = stat(faGetPlatPath(aFaPath), &statBuf);
-		if (status)
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+		if (status) {
+			interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+			return 0; }
 
 		switch (attributeNumber) {
 
@@ -431,8 +432,9 @@ int		mode;
 	} else if (attributeNumber == 16) {
 		/* isSymlink */
 		status = lstat(faGetPlatPath(aFaPath), &statBuf);
-		if (status)
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+		if (status) {
+			interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+			 return 0; }
 		if (S_ISLNK(statBuf.st_mode))
 			resultOop = interpreterProxy->trueObject();
 		else
@@ -449,7 +451,7 @@ int		mode;
  *
  * Populate the supplied array with the file attributes.
  *
- * Set the interpreterProxy primitiveFailure flag on error.
+ * On error answer the status.
  *
  */
 sqInt faFileStatAttributes(fapath *aFaPath, int lStat, sqInt attributeArray)
@@ -465,7 +467,7 @@ char		targetFile[FA_PATH_MAX];
 	if (lStat) {
 		status = lstat(faGetPlatPath(aFaPath), &statBuf);
 		if (status)
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH);
+			return FA_CANT_STAT_PATH;
 		if (S_ISLNK(statBuf.st_mode)) {
 			/* This is a symbolic link, provide the target filename */
 			status = readlink(faGetPlatPath(aFaPath), targetFile, FA_PATH_MAX);
@@ -474,10 +476,8 @@ char		targetFile[FA_PATH_MAX];
 	else {
 		status = stat(faGetPlatPath(aFaPath), &statBuf);
 		if (status)
-			return interpreterProxy->primitiveFailForOSError(FA_CANT_STAT_PATH); }
+			return FA_CANT_STAT_PATH; }
 
-printf("%s: %d\n", faGetStPath(aFaPath), statBuf.st_mode);
-fflush(stdout);
 	interpreterProxy->storePointerofObjectwithValue(
 		0, attributeArray,
 		targetOop);
@@ -529,6 +529,11 @@ fflush(stdout);
 
 	interpreterProxy->storePointerofObjectwithValue(
 		11, attributeArray,
+		interpreterProxy->nilObject());
+
+	/* Windows file attribute flags - not supported on Unix */
+	interpreterProxy->storePointerofObjectwithValue(
+		12, attributeArray,
 		interpreterProxy->nilObject());
 
 	return FA_SUCCESS;
